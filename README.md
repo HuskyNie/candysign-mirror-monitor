@@ -2,6 +2,8 @@
 
 小电拼菜单栏工具（非官方）。
 
+采用 [MIT License](LICENSE)，Copyright (c) 2026 HuskyNie。
+
 macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/metrics.json`。每 2 秒刷新，菜单栏显示 USB 总输出功率，点击查看 C1～C4、USB-A 的当前协议、电压、电流、功率及连接状态。
 
 ## 构建与运行
