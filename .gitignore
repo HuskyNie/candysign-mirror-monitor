@@ -1,0 +1,13 @@
+build/
+.DS_Store
+*.xcuserstate
+
+# 本机配置、凭据及诊断文件
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
