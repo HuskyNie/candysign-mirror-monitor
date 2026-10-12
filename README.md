@@ -6,6 +6,8 @@
 
 macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/metrics.json`。每 2 秒刷新，菜单栏显示 USB 总输出功率，点击查看 C1～C4、USB-A 的当前协议、电压、电流、功率及连接状态。
 
+菜单栏采用适配深浅色模式的单色充电图标；未连接时显示斜杠图标并隐藏文字，点击仍可查看详情。应用图标由 `Sources/Artwork.swift` 中的矢量绘制代码生成，构建时自动打包各尺寸图标。
+
 ## 构建与运行
 
 需要 Apple Command Line Tools（`swiftc`），无第三方依赖。

@@ -25,7 +25,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
             }
         }
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "⚡ —"
+        updateStatusIcon(connected: false)
         item.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         item.button?.target = self
         item.button?.action = #selector(toggle)
@@ -131,7 +131,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
                 lastSuccess = Date()
                 total.stringValue = String(format: "%.2f W", metrics.totalWatts)
                 total.textColor = .labelColor
-                item.button?.title = String(format: "⚡ %.1f W", metrics.totalWatts)
+                updateStatusIcon(connected: true, watts: metrics.totalWatts)
                 item.button?.toolTip = "小电拼 · \(currentHost) · 每 2 秒更新"
                 state.stringValue = "● 已连接  ·  \(currentHost)"
                 state.textColor = .systemGreen
@@ -169,7 +169,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
         let root = popover.contentViewController!.view
         root.layoutSubtreeIfNeeded()
         precondition(rows.count == 5)
-        precondition(item.button!.title == String(format: "⚡ %.1f W", metrics.totalWatts))
+        precondition(item.button!.title == String(format: " %.1f W", metrics.totalWatts))
         precondition(state.stringValue.hasPrefix("● 已连接"))
         for port in metrics.ports {
             guard let row = rows[port.id] else { continue }
@@ -184,7 +184,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
         if verificationSamples == 1 {
             let previous = total.stringValue
             markOffline("Integration test: simulated disconnect")
-            precondition(item.button!.title == "⚡ 离线" && state.stringValue.contains("过期"))
+            precondition(item.button!.title.isEmpty && item.button!.image?.isTemplate == true && state.stringValue.contains("过期"))
             precondition(total.stringValue == previous && updated.stringValue.contains("上次成功"))
             print("PASS: stale values explicitly marked after simulated disconnect")
         }
@@ -194,8 +194,16 @@ final class Monitor: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func updateStatusIcon(connected: Bool, watts: Double = 0) {
+        item.button?.image = Artwork.status(connected: connected)
+        item.button?.imagePosition = connected ? .imageLeading : .imageOnly
+        item.button?.title = connected ? String(format: " %.1f W", watts) : ""
+        item.button?.setAccessibilityLabel(connected ? "小电拼，USB 总功率" : "小电拼未连接")
+        item.button?.toolTip = connected ? "小电拼已连接" : "小电拼未连接，点击查看详情"
+    }
+
     private func markOffline(_ message: String) {
-        item.button?.title = "⚡ 离线"
+        updateStatusIcon(connected: false)
         item.button?.toolTip = message
         state.stringValue = "● 连接中断 · 数据已过期"
         state.textColor = .systemOrange
@@ -247,7 +255,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(host, forKey: "deviceHost")
         lastSuccess = nil
         total.stringValue = "— W"
-        item.button?.title = "⚡ —"
+        updateStatusIcon(connected: false)
         state.stringValue = "正在连接 · \(host)"
         state.textColor = .secondaryLabelColor
         state.toolTip = nil
