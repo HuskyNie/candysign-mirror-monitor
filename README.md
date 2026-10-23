@@ -50,7 +50,7 @@ open "build/.artifacts/Mirror Monitor.app"
 
 使用 Git 推送源码即可，`build/`、本地环境文件、日志和常见私钥文件已忽略。不要将整个工作目录（含 `.git/` 和构建缓存）打包作为源码发布。提交作者邮箱属于 Git 历史元数据，公开发布前应确认是否使用 GitHub 提供的 noreply 地址。
 
-## 端口二级详情（1.2.1）
+## 端口二级详情（1.2.2）
 
 - 本次累计输出直接读取硬件 `session_charge`（µWs），除以 3,600,000,000 转为 Wh；时长直接读取 `charging_duration_seconds`。这不是今日电量，也不是电池实际增加的能量。
 - 分配功率上限来自 `power_budget`，不代表当前功率或线材额定功率。
@@ -68,3 +68,5 @@ open "build/.artifacts/Mirror Monitor.app"
 主浮层与侧边卡片保持联动，鼠标可跨越间隙进入详情；悬浮其他端口直接切换。点击外部、按 Esc、再次点击菜单栏图标时统一收起；空间不足时详情自动显示在左侧，内容过长可滚动。
 
 `--verify-ui` 使用内置模拟数据验证主面板、五个悬浮回调、侧边卡片位置和统一收起，不发起设备请求；它不是实机连接验收。临时预览输出为 `/private/tmp/mirror-main-preview.png` 和 `/private/tmp/mirror-detail-preview.png`。
+
+鼠标离开当前端口和二级详情后延迟 280 ms 收起二级卡片；跨越间隙进入详情、重新进入当前端口或切换端口时取消旧的收起任务。主面板保持展开。`--verify-ui` 包含这五种悬浮退出回归检查。

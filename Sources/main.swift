@@ -4,6 +4,7 @@ import AppKit
 final class PortRow: NSView {
     let id: Int
     var onHover: ((Int) -> Void)?
+    var onExit: ((Int) -> Void)?
     private let name = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "等待设备数据")
     private let power = NSTextField(labelWithString: "— W")
@@ -43,6 +44,7 @@ final class PortRow: NSView {
         addTrackingArea(tracking!)
     }
     override func mouseEntered(with event: NSEvent) { onHover?(id) }
+    override func mouseExited(with event: NSEvent) { onExit?(id) }
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); onHover?(id) }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 124 || event.keyCode == 36 || event.keyCode == 49 { onHover?(id) }
@@ -56,6 +58,21 @@ final class PortRow: NSView {
 }
 
 @MainActor
+final class DetailHoverScrollView: NSScrollView {
+    var onEnter: (() -> Void)?
+    var onExit: (() -> Void)?
+    private var tracking: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(tracking!)
+    }
+    override func mouseEntered(with event: NSEvent) { onEnter?() }
+    override func mouseExited(with event: NSEvent) { onExit?() }
+}
+
+@MainActor
 final class Monitor: NSObject, NSApplicationDelegate {
     private var item: NSStatusItem!
     private let popover = NSPopover()
@@ -65,6 +82,8 @@ final class Monitor: NSObject, NSApplicationDelegate {
     private var details: [Int: PortDetail] = [:]
     private var panel: NSPanel?
     private var selected: Int?
+    private var pendingDismissal: Task<Void, Never>?
+    private var pointerLocation: () -> NSPoint = { NSEvent.mouseLocation }
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var timer: Timer?
@@ -123,6 +142,10 @@ final class Monitor: NSObject, NSApplicationDelegate {
         for id in [1, 2, 3, 4, 0] {
             let row = PortRow(id: id)
             row.onHover = { [weak self] id in self?.showDetail(id) }
+            row.onExit = { [weak self] id in
+                guard self?.selected == id else { return }
+                self?.scheduleDetailDismissal()
+            }
             stack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             row.heightAnchor.constraint(equalToConstant: 56).isActive = true
@@ -167,6 +190,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
         }
     }
     private func showDetail(_ id: Int) {
+        cancelDetailDismissal()
         guard popover.isShown, let detail = details[id], selected != id else { return }
         hideDetail()
         selected = id; rows[id]?.selected = true
@@ -174,7 +198,9 @@ final class Monitor: NSObject, NSApplicationDelegate {
         child.isOpaque = false; child.backgroundColor = .clear; child.hasShadow = true
         child.isReleasedWhenClosed = false
         child.level = .popUpMenu
-        let scroll = NSScrollView(frame: child.contentView!.bounds)
+        let scroll = DetailHoverScrollView(frame: child.contentView!.bounds)
+        scroll.onEnter = { [weak self] in self?.cancelDetailDismissal() }
+        scroll.onExit = { [weak self] in self?.scheduleDetailDismissal() }
         scroll.autoresizingMask = [.width, .height]; scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         scroll.wantsLayer = true; scroll.layer?.cornerRadius = 16; scroll.layer?.masksToBounds = true
@@ -198,7 +224,27 @@ final class Monitor: NSObject, NSApplicationDelegate {
         let y = max(visible.minY + 6, min(anchor.maxY - height + 4, visible.maxY - height - 6))
         panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
     }
+    private func cancelDetailDismissal() {
+        pendingDismissal?.cancel()
+        pendingDismissal = nil
+    }
+    private func pointerIsInsideDetailOrRow() -> Bool {
+        guard let id = selected, let row = rows[id], let parent = row.window else { return false }
+        let point = pointerLocation()
+        let rowFrame = parent.convertToScreen(row.convert(row.bounds, to: nil))
+        return rowFrame.contains(point) || (panel?.frame.contains(point) ?? false)
+    }
+    private func scheduleDetailDismissal() {
+        cancelDetailDismissal()
+        guard let id = selected else { return }
+        pendingDismissal = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: 280_000_000) } catch { return }
+            guard let self, self.selected == id, !Task.isCancelled else { return }
+            if !self.pointerIsInsideDetailOrRow() { self.hideDetail() }
+        }
+    }
     private func hideDetail() {
+        cancelDetailDismissal()
         if let id = selected { details[id]?.stop(); rows[id]?.selected = false }
         selected = nil
         if let panel { panel.parent?.removeChildWindow(panel); panel.orderOut(nil) }
@@ -264,6 +310,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
                 precondition(rows[id]!.selected)
                 detail.stop()
             }
+            if supplied != nil { await verifyHoverDismissal() }
             hideDetail()
             let root = popover.contentViewController!.view
             root.layoutSubtreeIfNeeded()
@@ -277,6 +324,39 @@ final class Monitor: NSObject, NSApplicationDelegate {
         if verificationSamples == 1 { markOffline(); print("PASS: offline values cleared") }
         if verificationSamples >= 2 { closeMenus(); precondition(panel == nil && !popover.isShown); print("PASS: recovery and combined dismissal"); NSApp.terminate(nil) }
     }
+    private func verifyHoverDismissal() async {
+        let outside = NSPoint(x: -100_000, y: -100_000)
+        pointerLocation = { outside }
+        defer { pointerLocation = { NSEvent.mouseLocation }; hideDetail() }
+        showDetail(4)
+        rows[4]?.onExit?(4)
+        try? await Task.sleep(nanoseconds: 360_000_000)
+        precondition(panel == nil && selected == nil && rows[4]?.selected == false, "Leaving row must close detail and clear highlight")
+
+        showDetail(4)
+        rows[4]?.onExit?(4)
+        let inside = NSPoint(x: panel!.frame.midX, y: panel!.frame.midY)
+        pointerLocation = { inside }
+        (panel?.contentView as? DetailHoverScrollView)?.onEnter?()
+        try? await Task.sleep(nanoseconds: 360_000_000)
+        precondition(selected == 4 && panel != nil, "Crossing the gap into detail must keep it open")
+        pointerLocation = { outside }
+        (panel?.contentView as? DetailHoverScrollView)?.onExit?()
+        try? await Task.sleep(nanoseconds: 360_000_000)
+        precondition(panel == nil, "Leaving detail must close it")
+
+        showDetail(4)
+        rows[4]?.onExit?(4)
+        rows[4]?.onHover?(4)
+        try? await Task.sleep(nanoseconds: 360_000_000)
+        precondition(selected == 4, "Reentering row must cancel dismissal")
+        rows[4]?.onExit?(4)
+        rows[3]?.onHover?(3)
+        try? await Task.sleep(nanoseconds: 360_000_000)
+        precondition(selected == 3, "Old row dismissal must not close a new port")
+        print("PASS: row exit, detail entry/exit, gap crossing, row reentry and switching cancellation")
+    }
+
     private func updateIcon(connected: Bool, watts: Double = 0) {
         item.button?.image = Artwork.status(connected: connected)
         item.button?.imagePosition = connected ? .imageLeading : .imageOnly
