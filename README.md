@@ -4,7 +4,7 @@
 
 采用 [MIT License](LICENSE)，Copyright (c) 2026 HuskyNie。
 
-macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/metrics.json`。每 2 秒刷新，菜单栏显示 USB 总输出功率，点击查看 C1～C4、USB-A 的当前协议、电压、电流、功率及连接状态。
+macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/metrics.json`。每 2 秒刷新，菜单栏显示 USB 总输出功率，点击查看 C1～C4、USB-A 的当前协议、电压、电流、功率及连接状态。点击各端口右侧的「›」打开二级详情。
 
 菜单栏采用适配深浅色模式的单色充电图标；未连接时显示斜杠图标并隐藏文字，点击仍可查看详情。应用图标由 `Sources/Artwork.swift` 中的矢量绘制代码生成，构建时自动打包各尺寸图标。
 
@@ -14,6 +14,7 @@ macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/
 
 ```sh
 bash scripts/test.sh
+bash scripts/test-ui.sh
 bash scripts/build.sh
 open "build/Mirror Monitor.app"
 ```
@@ -34,7 +35,7 @@ open "build/Mirror Monitor.app"
 - 本机验证的端口布局是 id 0 = USB-A、id 1～4 = C1～C4。
 - 无快充协议显示「普通充电」；PD 固定高压不会冒称 PD 3.1/3.2，因为该字段不足以区分版本。
 - 请求超时 4 秒；不重叠请求，不缓存 HTTP 响应，不跟随跳转。错误时显示离线及最后成功时间，旧数据变灰，自动重试；睡眠暂停，唤醒恢复。
-- 仅请求 `/metrics.json`，不修改充电策略、端口开关、MQTT 或固件。只接受私有 IPv4 / 链路本地 IPv4 / `.local` 主机名，不使用系统代理。
+- 仅请求 `/metrics.json` 和 `/porthistoryz?limit=180`，不修改充电策略、端口开关、MQTT 或固件。只接受私有 IPv4 / 链路本地 IPv4 / `.local` 主机名，不使用系统代理。
 
 ## 协议来源
 
@@ -48,3 +49,16 @@ open "build/Mirror Monitor.app"
 设备地址只保存在本机 UserDefaults，源码中的 IP 均为测试或输入示例。应用只向配置的局域网设备请求状态，不上传数据。诊断命令会在本地终端显示端口数据；共享诊断输出或截图前请检查其中的设备地址。
 
 使用 Git 推送源码即可，`build/`、本地环境文件、日志和常见私钥文件已忽略。不要将整个工作目录（含 `.git/` 和构建缓存）打包作为源码发布。提交作者邮箱属于 Git 历史元数据，公开发布前应确认是否使用 GitHub 提供的 noreply 地址。
+
+## 端口二级详情（1.1.0）
+
+- 本次累计输出直接读取硬件 `session_charge`（µWs），除以 3,600,000,000 转为 Wh；时长直接读取 `charging_duration_seconds`。这不是今日电量，也不是电池实际增加的能量。
+- 分配功率上限来自 `power_budget`，不代表当前功率或线材额定功率。
+- 近 30 分钟曲线读取硬件历史，当前固件为 180 个 10 秒样本。按接口采样周期计算覆盖时长；不足 30 分钟时显示实际覆盖时长，不补齐。
+- 历史输出量按采样电压 × 电流 × 采样周期估算；平均和峰值都基于采样，不能代表瞬时峰值。
+- 详情窗口可独立打开，打开期间每 10 秒刷新；关闭或电脑睡眠后停止，重开时重新读取。数据只保留在内存，不保存历史到磁盘，也不接入云端。
+- 线材和 PD 信息来自可选 `pd_status`。缺失显示「未获取」；未检测到 eMarker 时不把默认零值解读为 USB 2.0 / 20 V 线材。USB 速率是线材声明能力，不是实测传输速率。
+- 协商电压、电流按固件 10 mV / 10 mA 单位解析。PD 修订编号保留原始编码，避免不同固件编码差异导致冒称协议版本。
+- 请求失败会清除详情中的对应数值并提示未获取；历史失败不影响会话数据显示。
+
+可用 `open "build/Mirror Monitor.app" --args --show-port 4` 直接打开 C4 详情（0 为 USB-A）。`--verify` 还会检查五个详情页的实机数据、历史和布局，并将 C4 的临时布局预览写到 `/private/tmp/mirror-detail-preview.png`；这是手动验证专用输出，正常运行不会写入。

@@ -8,6 +8,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
     private let state = NSTextField(labelWithString: "等待连接")
     private let updated = NSTextField(labelWithString: "每 2 秒更新 · 本地连接")
     private var rows: [Int: (NSTextField, NSTextField, NSTextField)] = [:]
+    private var detailWindows: [Int: PortDetail] = [:]
     private var timer: Timer?
     private var request: Task<Void, Never>?
     private var generation = 0
@@ -35,6 +36,10 @@ final class Monitor: NSObject, NSApplicationDelegate {
         start()
         if host.isEmpty { settings() }
         if CommandLine.arguments.contains("--show") { toggle() }
+        if let index = CommandLine.arguments.firstIndex(of: "--show-port"), CommandLine.arguments.count > index + 1,
+           let id = Int(CommandLine.arguments[index + 1]), (0...4).contains(id), !host.isEmpty {
+            let button = NSButton(); button.tag = id; showDetail(button)
+        }
     }
 
     private func label(_ text: String, size: CGFloat = 12, color: NSColor = .labelColor) -> NSTextField {
@@ -76,14 +81,20 @@ final class Monitor: NSObject, NSApplicationDelegate {
             name.font = .systemFont(ofSize: 14, weight: .semibold)
             name.widthAnchor.constraint(equalToConstant: 55).isActive = true
             let details = label("等待数据", size: 12, color: .secondaryLabelColor)
-            details.widthAnchor.constraint(equalToConstant: 233).isActive = true
+            details.widthAnchor.constraint(equalToConstant: 205).isActive = true
             details.maximumNumberOfLines = 2
             details.lineBreakMode = .byTruncatingTail
             let power = label("— W", size: 15)
             power.font = .monospacedDigitSystemFont(ofSize: 15, weight: .medium)
             power.alignment = .right
             power.widthAnchor.constraint(equalToConstant: 88).isActive = true
-            let row = NSStackView(views: [name, details, power])
+            let detailButton = NSButton(title: "›", target: self, action: #selector(showDetail(_:)))
+            detailButton.tag = id
+            detailButton.bezelStyle = .inline
+            detailButton.toolTip = "查看历史、会话、线材和 PD 详情"
+            detailButton.setAccessibilityLabel("\(id == 0 ? "USB-A" : "C\(id)") 端口详情")
+            detailButton.widthAnchor.constraint(equalToConstant: 18).isActive = true
+            let row = NSStackView(views: [name, details, power, detailButton])
             row.spacing = 10
             row.heightAnchor.constraint(equalToConstant: 38).isActive = true
             stack.addArrangedSubview(row)
@@ -102,6 +113,18 @@ final class Monitor: NSObject, NSApplicationDelegate {
         popover.contentViewController = controller
         popover.contentSize = NSSize(width: 440, height: 530)
         popover.behavior = .transient
+    }
+
+    @objc private func showDetail(_ sender: NSButton) {
+        guard !host.isEmpty else { settings(); return }
+        popover.performClose(nil)
+        if detailWindows[sender.tag] == nil { detailWindows[sender.tag] = PortDetail(portID: sender.tag, host: host) }
+        detailWindows[sender.tag]?.present()
+    }
+
+    private func closeDetails() {
+        for detail in detailWindows.values { detail.stop(); detail.close() }
+        detailWindows.removeAll()
     }
 
     @objc private func toggle() {
@@ -182,6 +205,11 @@ final class Monitor: NSObject, NSApplicationDelegate {
         precondition(root.bounds.contains(footerRect), "Footer must fit in popover: \(footerRect) vs \(root.bounds)")
         print("Live UI sample \(verificationSamples): \(item.button!.title), five rows and layout OK")
         if verificationSamples == 1 {
+            for id in [0, 1, 2, 3, 4] {
+                let detail = PortDetail(portID: id, host: host)
+                detailWindows[id] = detail
+                detail.present()
+            }
             let previous = total.stringValue
             markOffline("Integration test: simulated disconnect")
             precondition(item.button!.title.isEmpty && item.button!.image?.isTemplate == true && state.stringValue.contains("过期"))
@@ -189,6 +217,12 @@ final class Monitor: NSObject, NSApplicationDelegate {
             print("PASS: stale values explicitly marked after simulated disconnect")
         }
         if verificationSamples >= 3 {
+            for detail in detailWindows.values {
+                precondition(detail.hasLiveData && detail.verifiedHistoryCount > 0, "Detail must load live metrics and hardware history")
+                detail.verifyLayout()
+            }
+            closeDetails()
+            print("PASS: five port detail windows loaded live metrics and hardware history")
             print("PASS: real-device polling, rendered labels, layout bounds and recovery")
             NSApp.terminate(nil)
         }
@@ -219,6 +253,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
     }
 
     @objc private func sleep() {
+        closeDetails()
         timer?.invalidate()
         generation += 1
         request?.cancel()
@@ -251,6 +286,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
         generation += 1
         request?.cancel()
         request = nil
+        closeDetails()
         host = candidate
         UserDefaults.standard.set(host, forKey: "deviceHost")
         lastSuccess = nil
