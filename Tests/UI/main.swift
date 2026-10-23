@@ -10,11 +10,11 @@ MainActor.assumeIsolated {
     let port = try! Metrics.decode(Data(fixture.utf8)).ports[0]
     let samples = (0..<180).map { PortHistory.Sample(voltage: 12000, current: 350 + Double($0 % 15) * 10) }
     let history = PortHistory(sample_period_ms: 10000, ports: [.init(port: 4, samples: samples)])
-    detail.showWindow(nil)
+    precondition(detail.card.bounds.width == 430)
     detail.render(port)
     detail.render(history, samples: samples)
     detail.verifyLayout()
-    print("PASS: full cable/PD, session values and 180-point chart fit detail document")
+    print("PASS: custom hover card: full cable/PD, session values and 180-point chart fit")
     let absent = fixture.replacingOccurrences(of: "\"has_emarker\":true", with: "\"has_emarker\":false")
     detail.render(try! Metrics.decode(Data(absent.utf8)).ports[0])
     detail.render(history, samples: [])
@@ -23,5 +23,5 @@ MainActor.assumeIsolated {
     detail.render(port)
     detail.render(history, samples: samples)
     detail.verifyLayout()
-    detail.close()
+    detail.stop()
 }

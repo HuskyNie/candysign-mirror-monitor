@@ -4,7 +4,7 @@
 
 采用 [MIT License](LICENSE)，Copyright (c) 2026 HuskyNie。
 
-macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/metrics.json`。每 2 秒刷新，菜单栏显示 USB 总输出功率，点击查看 C1～C4、USB-A 的当前协议、电压、电流、功率及连接状态。点击各端口右侧的「›」打开二级详情。
+macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/metrics.json`。每 2 秒刷新，菜单栏显示 USB 总输出功率，点击查看 C1～C4、USB-A 的当前协议、电压、电流、功率及连接状态。鼠标悬浮在端口整行，即可向侧边展开二级详情，无需点击箭头或打开窗口。
 
 菜单栏采用适配深浅色模式的单色充电图标；未连接时显示斜杠图标并隐藏文字，点击仍可查看详情。应用图标由 `Sources/Artwork.swift` 中的矢量绘制代码生成，构建时自动打包各尺寸图标。
 
@@ -16,14 +16,14 @@ macOS 13+ 原生 AppKit 应用，通过局域网读取小电拼 IonBridge 的 `/
 bash scripts/test.sh
 bash scripts/test-ui.sh
 bash scripts/build.sh
-open "build/Mirror Monitor.app"
+open "build/.artifacts/Mirror Monitor.app"
 ```
 
 首次启动输入设备局域网 IP；之后可在「设备地址…」中更改。地址保存在本机 UserDefaults，不写进源码。可将应用复制到「应用程序」，按需在 macOS「登录项」中添加。
 
-调试时可运行 `build/Mirror Monitor.app/Contents/MacOS/MirrorMonitor --probe <设备IP>`，使用与界面相同的解析与网络代码读取一次数据。`open` 启动可附加 `--args --host <设备IP> --show` 设置地址并展开面板。
+调试时可运行 `build/.artifacts/Mirror Monitor.app/Contents/MacOS/MirrorMonitor --probe <设备IP>`，使用与界面相同的解析与网络代码读取一次数据。`open` 启动可附加 `--args --host <设备IP> --show` 设置地址并展开面板。
 
-实机集成验证：`build/Mirror Monitor.app/Contents/MacOS/MirrorMonitor --host <设备IP> --verify`，连续读取三次，校验实际界面文本、五行数据和面板边界，并模拟应用内离线状态后验证下一次轮询恢复；完成后自动退出。该模拟不操作设备或电脑的网络。
+实机集成验证：`build/.artifacts/Mirror Monitor.app/Contents/MacOS/MirrorMonitor --host <设备IP> --verify`，连续读取三次，校验实际界面文本、五行数据和面板边界，并模拟应用内离线状态后验证下一次轮询恢复；完成后自动退出。该模拟不操作设备或电脑的网络。
 
 若 macOS 弹出本地网络访问提示，选择允许；若已拒绝，在系统设置的「隐私与安全性 → 本地网络」里允许小电拼。设备和电脑需处于可互访的局域网。
 
@@ -50,15 +50,21 @@ open "build/Mirror Monitor.app"
 
 使用 Git 推送源码即可，`build/`、本地环境文件、日志和常见私钥文件已忽略。不要将整个工作目录（含 `.git/` 和构建缓存）打包作为源码发布。提交作者邮箱属于 Git 历史元数据，公开发布前应确认是否使用 GitHub 提供的 noreply 地址。
 
-## 端口二级详情（1.1.0）
+## 端口二级详情（1.2.1）
 
 - 本次累计输出直接读取硬件 `session_charge`（µWs），除以 3,600,000,000 转为 Wh；时长直接读取 `charging_duration_seconds`。这不是今日电量，也不是电池实际增加的能量。
 - 分配功率上限来自 `power_budget`，不代表当前功率或线材额定功率。
 - 近 30 分钟曲线读取硬件历史，当前固件为 180 个 10 秒样本。按接口采样周期计算覆盖时长；不足 30 分钟时显示实际覆盖时长，不补齐。
 - 历史输出量按采样电压 × 电流 × 采样周期估算；平均和峰值都基于采样，不能代表瞬时峰值。
-- 详情窗口可独立打开，打开期间每 10 秒刷新；关闭或电脑睡眠后停止，重开时重新读取。数据只保留在内存，不保存历史到磁盘，也不接入云端。
+- 使用自定义主浮层和侧边详情卡片；端口整行高 56 点，悬浮或点击均可展开。没有原生级联菜单，也不打开带标题栏的独立窗口。悬浮展开详情时每 10 秒刷新历史，收起或电脑睡眠后停止，重新展开时重新读取。实时数据复用主菜单的轮询，不为每个端口重复请求。数据只保留在内存，不保存历史到磁盘，也不接入云端。
 - 线材和 PD 信息来自可选 `pd_status`。缺失显示「未获取」；未检测到 eMarker 时不把默认零值解读为 USB 2.0 / 20 V 线材。USB 速率是线材声明能力，不是实测传输速率。
 - 协商电压、电流按固件 10 mV / 10 mA 单位解析。PD 修订编号保留原始编码，避免不同固件编码差异导致冒称协议版本。
 - 请求失败会清除详情中的对应数值并提示未获取；历史失败不影响会话数据显示。
 
-可用 `open "build/Mirror Monitor.app" --args --show-port 4` 直接打开 C4 详情（0 为 USB-A）。`--verify` 还会检查五个详情页的实机数据、历史和布局，并将 C4 的临时布局预览写到 `/private/tmp/mirror-detail-preview.png`；这是手动验证专用输出，正常运行不会写入。
+可用 `open "build/.artifacts/Mirror Monitor.app" --args --show` 展开主浮层。`--verify` 检查五个自定义悬浮入口与侧边卡片、实机数据、历史、布局和断线恢复，并将 C4 的临时布局预览写到 `/private/tmp/mirror-detail-preview.png`；这是手动验证专用输出，正常运行不会写入。
+
+构建产物位于 `build/.artifacts/` 隐藏目录，日常只启动安装在 `~/Applications/` 的副本，避免系统搜索同时收录安装版和构建版。优先在「设备地址」中配置设备的 `.local` 名称，以跟随 DHCP 地址变化。
+
+主浮层与侧边卡片保持联动，鼠标可跨越间隙进入详情；悬浮其他端口直接切换。点击外部、按 Esc、再次点击菜单栏图标时统一收起；空间不足时详情自动显示在左侧，内容过长可滚动。
+
+`--verify-ui` 使用内置模拟数据验证主面板、五个悬浮回调、侧边卡片位置和统一收起，不发起设备请求；它不是实机连接验收。临时预览输出为 `/private/tmp/mirror-main-preview.png` 和 `/private/tmp/mirror-detail-preview.png`。
