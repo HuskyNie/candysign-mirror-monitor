@@ -139,7 +139,9 @@ final class PortDetail: NSObject {
         let budget = port.power_budget.flatMap { $0.isFinite && $0 >= 0 ? String(format: "%.0f W", $0) : nil } ?? "未获取"
         session.stringValue = "本次输出  \(energy)    ·    \(port.durationText)\n当前功率  \(String(format: "%.2f W", port.watts))    ·    功率上限  \(budget)"
         cable.stringValue = port.pd_status?.cableText ?? "未获取 · 设备未返回线材信息"
-        pd.stringValue = port.pd_status?.pdText ?? "未获取 · 设备未返回 PD 详情"
+        pd.stringValue = port.pd_status?.pdText ?? ((15...21).contains(port.fc_protocol) && port.attached
+            ? "已识别：\(port.protocolName)\n协商参数未获取 · 设备的 PD 详情为空"
+            : "未获取 · 设备未返回 PD 详情")
         status.stringValue = "\(port.attached ? port.protocolName : "未连接") · \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)) 更新"
         status.textColor = .secondaryLabelColor
         hasLiveData = true

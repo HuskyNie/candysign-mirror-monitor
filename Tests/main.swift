@@ -41,7 +41,7 @@ for bad in ["{\"sample_period_ms\":0,\"ports\":[]}", "{\"sample_period_ms\":1000
     precondition((try? PortHistory.decode(Data(bad.utf8))) == nil)
 }
 let validPD = try JSONDecoder().decode(PDStatus.self, from: Data("""
-{"has_emarker":true,"cable_max_vbus_voltage":3,"cable_max_vbus_current":2,"cable_usb_highest_speed":3,"cable_epr_mode_capable":true,"operating_voltage":2000,"operating_current":300,"pps_charging_supported":false}
+{"has_emarker":true,"cable_max_vbus_voltage":3,"cable_max_vbus_current":2,"cable_usb_highest_speed":3,"cable_epr_mode_capable":true,"operating_voltage":20000,"operating_current":3000,"pd_revision":2,"pps_charging_supported":false}
 """.utf8))
 precondition(validPD.cableText.contains("50 V") && validPD.cableText.contains("5 A") && validPD.cableText.contains("USB4 Gen 3"))
 precondition(validPD.pdText.contains("20.00 V") && validPD.pdText.contains("3.00 A") && validPD.pdText.contains("PPS：不支持"))
@@ -50,3 +50,5 @@ precondition(emptyPD.cableText.contains("未获取") && !emptyPD.cableText.conta
 let noMarker = try JSONDecoder().decode(PDStatus.self, from: Data("{\"has_emarker\":false,\"cable_usb_highest_speed\":0}".utf8))
 precondition(noMarker.cableText.contains("未检测到") && !noMarker.cableText.contains("USB 2.0"))
 print("PASS: hardware session units, absent data, history energy/validation, cable capability and PD units")
+
+precondition(validPD.pdText.contains("PD 修订：3.0"), "HTTP JSON follows official dashboard revision mapping")

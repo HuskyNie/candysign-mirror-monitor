@@ -152,10 +152,10 @@ struct PDStatus: Decodable {
     var pdText: String {
         func operating(_ key: String, unit: String) -> String {
             guard let n = number(key), n > 0 else { return "未获取" }
-            return String(format: "%.2f %@", n / 100, unit)
+            return String(format: "%.2f %@", n / 1000, unit)
         }
         return [
-            "PD 版本编码：" + (number("pd_revision").map { String(format: "%.0f", $0) } ?? "未获取"),
+            "PD 修订：" + mapped("pd_revision", [0: "1.0", 1: "2.0", 2: "3.0", 3: "保留值"]),
             "协商电压：" + operating("operating_voltage", unit: "V"),
             "协商电流：" + operating("operating_current", unit: "A"),
             "PPS：" + yesNo("pps_charging_supported"),
