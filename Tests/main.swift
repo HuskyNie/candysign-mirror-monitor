@@ -52,3 +52,9 @@ precondition(noMarker.cableText.contains("未检测到") && !noMarker.cableText.
 print("PASS: hardware session units, absent data, history energy/validation, cable capability and PD units")
 
 precondition(validPD.pdText.contains("PD 修订：3.0"), "HTTP JSON follows official dashboard revision mapping")
+
+precondition(metrics.ports[0].cableDescription.contains("不适用"))
+precondition(extraPort.cableDescription.contains("暂未上报"))
+let unplugged = try Metrics.decode(Data(extra.replacingOccurrences(of: "\"attached\":true", with: "\"attached\":false").utf8)).ports[2]
+precondition(unplugged.cableDescription.contains("未连接") && !unplugged.cableDescription.contains("暂未上报"))
+print("PASS: USB-A, unplugged USB-C and absent device cable data are distinct")

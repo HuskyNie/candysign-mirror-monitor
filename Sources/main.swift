@@ -29,7 +29,7 @@ final class PortRow: NSView {
     override func layout() {
         super.layout()
         name.frame = NSRect(x: 14, y: 29, width: 110, height: 19)
-        subtitle.frame = NSRect(x: 14, y: 10, width: 200, height: 16)
+        subtitle.frame = NSRect(x: 14, y: 10, width: bounds.width - 46, height: 16)
         power.frame = NSRect(x: bounds.width - 127, y: 22, width: 95, height: 23)
         arrow.frame = NSRect(x: bounds.width - 24, y: 17, width: 14, height: 28)
     }
@@ -51,8 +51,12 @@ final class PortRow: NSView {
         else { super.keyDown(with: event) }
     }
     override func accessibilityPerformPress() -> Bool { onHover?(id); return true }
+    func verifyMeasurements() {
+        precondition(subtitle.stringValue.contains("0.400 A"), "First-level current missing")
+        precondition(subtitle.intrinsicContentSize.width <= subtitle.bounds.width, "Measurements clipped")
+    }
     func render(_ port: Port?) {
-        subtitle.stringValue = port.map { $0.attached ? String(format: "%@ · %.2f V", $0.protocolName, $0.volts) : ($0.active ? "未连接" : "已关闭") } ?? "未获取 · 等待连接"
+        subtitle.stringValue = port.map { $0.attached ? String(format: "%@ · %.2f V · %.3f A", $0.protocolName, $0.volts, $0.amps) : ($0.active ? "未连接" : "已关闭") } ?? "未获取 · 等待连接"
         power.stringValue = port.map { $0.attached ? String(format: "%.2f W", $0.watts) : "— W" } ?? "— W"
     }
 }
@@ -102,6 +106,8 @@ final class Monitor: NSObject, NSApplicationDelegate {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         item.button?.target = self; item.button?.action = #selector(toggle)
+        // Toggle on mouse-down, before a separate mouse-up can reopen a dismissed menu.
+        item.button?.sendAction(on: [.leftMouseDown])
         buildPopover(); buildDetails(); updateIcon(connected: false)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sleep), name: NSWorkspace.willSleepNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake), name: NSWorkspace.didWakeNotification, object: nil)
@@ -177,18 +183,31 @@ final class Monitor: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            Task { @MainActor in self?.closeMenus() }
+            // AppKit invokes event monitors on the main thread. Do not defer dismissal:
+            // a queued close could otherwise dismiss the next menu opened by the button.
+            MainActor.assumeIsolated {
+                self?.handleOutsideClick(at: NSEvent.mouseLocation, window: nil)
+            }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
             if event.type == .keyDown && event.keyCode == 53 { self.closeMenus(); return nil }
-            if event.type != .keyDown && event.window !== self.popover.contentViewController?.view.window && event.window !== self.panel {
-                // Leave the status button to toggle its own menu.
-                if event.window !== self.item.button?.window { self.closeMenus() }
+            if event.type != .keyDown {
+                let point = event.window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+                self.handleOutsideClick(at: point, window: event.window)
             }
             return event
         }
     }
+    private func handleOutsideClick(at point: NSPoint, window: NSWindow?) {
+        // Status items can be delivered without the same NSWindow identity. Use the
+        // actual button bounds so both local and global monitors leave toggling to it.
+        if let button = item.button, let owner = button.window,
+           owner.convertToScreen(button.convert(button.bounds, to: nil)).contains(point) { return }
+        if let window, window === popover.contentViewController?.view.window || window === panel { return }
+        closeMenus()
+    }
+
     private func showDetail(_ id: Int) {
         cancelDetailDismissal()
         guard popover.isShown, let detail = details[id], selected != id else { return }
@@ -310,11 +329,14 @@ final class Monitor: NSObject, NSApplicationDelegate {
                 precondition(rows[id]!.selected)
                 detail.stop()
             }
-            if supplied != nil { await verifyHoverDismissal() }
+            if supplied != nil { await verifyHoverDismissal(); verifyStatusToggle() }
             hideDetail()
             let root = popover.contentViewController!.view
             root.layoutSubtreeIfNeeded()
-            for row in rows.values { precondition(root.bounds.contains(row.convert(row.bounds, to: root))) }
+            for row in rows.values {
+                precondition(root.bounds.contains(row.convert(row.bounds, to: root)))
+                if supplied != nil { row.verifyMeasurements() }
+            }
             if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
                 root.cacheDisplay(in: root.bounds, to: bitmap)
                 try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/private/tmp/mirror-main-preview.png"))
@@ -324,6 +346,28 @@ final class Monitor: NSObject, NSApplicationDelegate {
         if verificationSamples == 1 { markOffline(); print("PASS: offline values cleared") }
         if verificationSamples >= 2 { closeMenus(); precondition(panel == nil && !popover.isShown); print("PASS: recovery and combined dismissal"); NSApp.terminate(nil) }
     }
+    private func verifyStatusToggle() {
+        closeMenus()
+        for _ in 0..<3 {
+            item.button!.performClick(nil)
+            precondition(popover.isShown, "First status click must open")
+            showDetail(2)
+            let button = item.button!
+            let rect = button.window!.convertToScreen(button.convert(button.bounds, to: nil))
+            handleOutsideClick(at: NSPoint(x: rect.midX, y: rect.midY), window: nil)
+            precondition(popover.isShown, "Windowless status click must not be dismissed as outside")
+            item.button!.performClick(nil)
+            precondition(!popover.isShown && panel == nil && globalMonitor == nil && localMonitor == nil,
+                         "Second status click must close both menus and remove monitors")
+        }
+        item.button!.performClick(nil)
+        handleOutsideClick(at: NSPoint(x: -100_000, y: -100_000), window: nil)
+        precondition(!popover.isShown, "Outside click must close")
+        item.button!.performClick(nil)
+        precondition(popover.isShown, "Status click after outside dismissal must reopen")
+        print("PASS: repeated status button toggles, windowless button events and outside dismissal")
+    }
+
     private func verifyHoverDismissal() async {
         let outside = NSPoint(x: -100_000, y: -100_000)
         pointerLocation = { outside }

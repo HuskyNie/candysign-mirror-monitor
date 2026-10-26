@@ -38,6 +38,11 @@ struct Port: Decodable {
     var amps: Double { current / 1000 }
     var watts: Double { volts * amps }
     var name: String { port_type == "A" ? "USB-A" : "C\(id)" }
+    var cableDescription: String {
+        guard port_type != "A" else { return "不适用 · USB-A 不提供 USB-C eMarker 信息" }
+        guard attached else { return "未连接 · 接入设备后读取线材信息" }
+        return pd_status?.cableText ?? "未获取 · 设备暂未上报线材详情"
+    }
     var protocolName: String {
         guard attached else { return "—" }
         let names = [0: "普通充电", 1: "QC 2.0", 2: "QC 3.0", 3: "QC 3+",
