@@ -79,8 +79,55 @@ enum Endpoint {
     }
 }
 
+// A short-lived address learned from a successful HTTP connection, never from disk.
+struct RecentLocalAddress {
+    let address: String
+    let expires: Date
+    func usable(at now: Date) -> Bool { now < expires }
+}
+enum LocalAddressCache {
+    private static let lock = NSLock()
+    private static var entries: [String: RecentLocalAddress] = [:]
+    static func remember(host: String, address: String, now: Date = Date()) {
+        guard host.hasSuffix(".local"), (try? Endpoint.url(host: address)) != nil, !address.hasSuffix(".local") else { return }
+        lock.lock(); defer { lock.unlock() }
+        entries[host] = RecentLocalAddress(address: address, expires: now.addingTimeInterval(30))
+    }
+    static func address(for host: String, now: Date = Date()) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard let entry = entries[host], entry.usable(at: now) else { entries[host] = nil; return nil }
+        return entry.address
+    }
+    static func clear(_ host: String? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        if let host { entries[host] = nil } else { entries.removeAll() }
+    }
+}
+
+struct ConnectionHealth {
+    private(set) var lastSuccess: Date?
+    private(set) var failures = 0
+    private(set) var nextAttempt = Date.distantPast
+    mutating func succeeded(at now: Date = Date()) {
+        lastSuccess = now; failures = 0; nextAttempt = .distantPast
+    }
+    mutating func failed(at now: Date = Date()) -> Bool {
+        failures += 1
+        let offline = lastSuccess == nil || failures >= 3 || now.timeIntervalSince(lastSuccess!) >= 15
+        nextAttempt = now.addingTimeInterval(failures >= 3 ? 8 : 2)
+        return offline
+    }
+    mutating func retryNow() { nextAttempt = .distantPast }
+}
+
 // Reject redirects: the configured local device is the only data source.
 final class LocalSessionDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard (task.response as? HTTPURLResponse)?.statusCode == 200,
+              let host = task.originalRequest?.url?.host, host.hasSuffix(".local"),
+              let address = metrics.transactionMetrics.last?.remoteAddress else { return }
+        LocalAddressCache.remember(host: host, address: address)
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
@@ -97,8 +144,24 @@ enum MetricsClient {
         return URLSession(configuration: config, delegate: LocalSessionDelegate(), delegateQueue: nil)
     }()
 
+    static func localData(from original: URL) async throws -> (Data, URLResponse) {
+        if let host = original.host, let address = LocalAddressCache.address(for: host),
+           var components = URLComponents(url: original, resolvingAgainstBaseURL: false) {
+            components.host = address
+            do {
+                let result = try await session.data(from: components.url!)
+                guard (result.1 as? HTTPURLResponse)?.statusCode == 200 else { throw MonitorError.invalidMetrics }
+                return result
+            } catch {
+                try Task.checkCancellation()
+                LocalAddressCache.clear(host)
+                // DHCP/address change: rediscover through the original .local name.
+            }
+        }
+        return try await session.data(from: original)
+    }
     static func fetch(host: String) async throws -> Metrics {
-        let (data, response) = try await session.data(from: Endpoint.url(host: host))
+        let (data, response) = try await localData(from: Endpoint.url(host: host))
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw MonitorError.http(code) }
         return try Metrics.decode(data)
@@ -206,7 +269,7 @@ extension MetricsClient {
         var components = URLComponents(url: try Endpoint.url(host: host), resolvingAgainstBaseURL: false)!
         components.path = "/porthistoryz"
         components.queryItems = [URLQueryItem(name: "limit", value: "180")]
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await localData(from: components.url!)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw MonitorError.http(code) }
         return try PortHistory.decode(data)

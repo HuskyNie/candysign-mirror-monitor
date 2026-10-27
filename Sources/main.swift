@@ -92,6 +92,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
     private var localMonitor: Any?
     private var timer: Timer?
     private var request: Task<Void, Never>?
+    private var health = ConnectionHealth()
     private var generation = 0
     private var verificationSamples = 0
     private var host = UserDefaults.standard.string(forKey: "deviceHost") ?? ""
@@ -100,7 +101,8 @@ final class Monitor: NSObject, NSApplicationDelegate {
         if let i = CommandLine.arguments.firstIndex(of: "--host"), CommandLine.arguments.count > i + 1 {
             let candidate = CommandLine.arguments[i + 1]
             if (try? Endpoint.url(host: candidate)) != nil {
-                host = candidate; UserDefaults.standard.set(host, forKey: "deviceHost")
+                LocalAddressCache.clear(); health = ConnectionHealth()
+        host = candidate; UserDefaults.standard.set(host, forKey: "deviceHost")
             }
         }
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -158,7 +160,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
             rows[id] = row
         }
         let settings = NSButton(title: "设备地址", target: self, action: #selector(settings))
-        let refresh = NSButton(title: "刷新", target: self, action: #selector(refresh))
+        let refresh = NSButton(title: "刷新", target: self, action: #selector(refreshNow))
         let quit = NSButton(title: "退出", target: self, action: #selector(quit))
         for button in [settings, refresh, quit] { button.bezelStyle = .rounded }
         let cloud = NSButton(title: "云端授权", target: self, action: #selector(cloudSettings))
@@ -281,8 +283,9 @@ final class Monitor: NSObject, NSApplicationDelegate {
         timer = Timer(timeInterval: 2, target: self, selector: #selector(refresh), userInfo: nil, repeats: true)
         RunLoop.main.add(timer!, forMode: .common); refresh()
     }
+    @objc private func refreshNow() { health.retryNow(); refresh() }
     @objc private func refresh() {
-        guard request == nil, !host.isEmpty else { return }
+        guard request == nil, !host.isEmpty, Date() >= health.nextAttempt else { return }
         let current = generation
         let currentHost = host
         request = Task { @MainActor in
@@ -294,17 +297,19 @@ final class Monitor: NSObject, NSApplicationDelegate {
                 if CommandLine.arguments.contains("--verify") { await verify() }
             } catch {
                 guard !Task.isCancelled, generation == current else { return }
-                markOffline()
+                if health.failed() { markOffline() } else { markStale() }
                 if CommandLine.arguments.contains("--verify") { fputs("Live verification failed: \(error.localizedDescription)\n", stderr); exit(1) }
             }
         }
     }
     private func apply(_ metrics: Metrics) {
+                health.succeeded()
                 total.stringValue = String(format: "%.2f W", metrics.totalWatts)
                 state.stringValue = "USB 总输出 · 悬浮端口查看详情"
                 updateIcon(connected: true, watts: metrics.totalWatts)
                 for (id, row) in rows {
                     let port = metrics.ports.first { $0.id == id }
+                    row.alphaValue = 1
                     row.render(port)
                     if let port { details[id]?.render(port) } else { details[id]?.markOffline() }
                 }
@@ -345,8 +350,24 @@ final class Monitor: NSObject, NSApplicationDelegate {
             }
         } catch { fputs("History verification failed: \(error.localizedDescription)\n", stderr); exit(1) }
         print("PASS: custom popover, five hover row handlers, attached borderless detail panels, history and layout (\(supplied == nil ? "real device" : "fixture"))")
-        if verificationSamples == 1 { markOffline(); print("PASS: offline values cleared") }
+        if verificationSamples == 1 {
+            if supplied != nil { verifyConnectionHealth() }
+            markOffline(); print("PASS: offline values cleared") }
         if verificationSamples >= 2 { closeMenus(); precondition(panel == nil && !popover.isShown); print("PASS: recovery and combined dismissal"); NSApp.terminate(nil) }
+    }
+    private func verifyConnectionHealth() {
+        let savedTotal = total.stringValue
+        let now = Date()
+        health.succeeded(at: now)
+        precondition(!health.failed(at: now.addingTimeInterval(4)))
+        markStale()
+        precondition(total.stringValue == savedTotal && state.stringValue.contains("更新延迟"))
+        precondition(item.button!.title.hasPrefix(" ~") && rows.values.allSatisfy { $0.alphaValue == 0.55 })
+        precondition(!health.failed(at: now.addingTimeInterval(8)))
+        precondition(health.failed(at: now.addingTimeInterval(12)))
+        markOffline()
+        precondition(total.stringValue == "— W" && item.button!.title.isEmpty)
+        print("PASS: temporary failure retains explicitly stale data; sustained failure clears display")
     }
     private func verifyStatusToggle() {
         closeMenus()
@@ -409,15 +430,22 @@ final class Monitor: NSObject, NSApplicationDelegate {
         item.button?.title = connected ? String(format: " %.1f W", watts) : ""
         item.button?.toolTip = connected ? "小电拼 · 点击后悬浮端口查看详情" : "小电拼未连接 · 点击检查设备地址"
     }
+    private func markStale() {
+        let time = health.lastSuccess.map { DateFormatter.localizedString(from: $0, dateStyle: .none, timeStyle: .medium) } ?? "—"
+        state.stringValue = "更新延迟 · 显示 \(time) 的数据"
+        if !item.button!.title.hasPrefix(" ~") { item.button!.title = " ~" + item.button!.title.trimmingCharacters(in: .whitespaces) }
+        item.button?.toolTip = "数据暂未更新 · 上次成功 \(time)"
+        for (id, row) in rows { row.alphaValue = 0.55; details[id]?.markStale(time: time) }
+    }
     private func markOffline() {
         updateIcon(connected: false)
         total.stringValue = "— W"; state.stringValue = "设备不可达 · 自动重试中"
-        for (id, row) in rows { row.render(nil); details[id]?.markOffline() }
+        for (id, row) in rows { row.alphaValue = 1; row.render(nil); details[id]?.markOffline() }
     }
     @objc private func sleep() {
         closeMenus(); timer?.invalidate(); generation += 1; request?.cancel(); request = nil; markOffline()
     }
-    @objc private func wake() { start() }
+    @objc private func wake() { LocalAddressCache.clear(); health = ConnectionHealth(); start() }
     @objc private func cloudSettings() {
         closeMenus()
         let alert = NSAlert(); alert.messageText = "官方 MCP 授权"
@@ -444,6 +472,7 @@ final class Monitor: NSObject, NSApplicationDelegate {
             let error = NSAlert(); error.messageText = MonitorError.invalidHost.localizedDescription; error.runModal(); return
         }
         generation += 1; request?.cancel(); request = nil
+        LocalAddressCache.clear(); health = ConnectionHealth()
         host = candidate; UserDefaults.standard.set(host, forKey: "deviceHost")
         buildDetails(); markOffline(); refresh()
     }

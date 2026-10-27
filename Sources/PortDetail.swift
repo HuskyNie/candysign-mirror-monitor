@@ -143,6 +143,10 @@ final class PortDetail: NSObject {
         task?.cancel(); task = nil
         timer?.invalidate(); timer = nil
     }
+    func markStale(time: String) {
+        status.stringValue = "本地更新延迟 · 上次成功 \(time)"
+        status.textColor = .systemOrange
+    }
     func markOffline() {
         clearCloud(); lastPort = nil
         hasLiveData = false
