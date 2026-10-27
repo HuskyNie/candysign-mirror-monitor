@@ -58,6 +58,13 @@ final class PortDetail: NSObject {
     private let stack = NSStackView()
     private var timer: Timer?
     private var task: Task<Void, Never>?
+    private var cloudTask: Task<Void, Never>?
+    private var cloudTimer: Timer?
+    private var cloudRevision = 0
+    private var cloudPD: CloudPD?
+    private var cloudMessage = "官方 MCP · 展开后读取"
+    private var lastPort: Port?
+    private var visible = false
     private var revision = 0
     private(set) var verifiedHistoryCount = 0
     private(set) var hasLiveData = false
@@ -97,10 +104,10 @@ final class PortDetail: NSObject {
         body(cable)
         heading("PD 协商")
         body(pd)
-        let note = NSTextField(wrappingLabelWithString: "硬件历史 · 每 10 秒刷新 · 不保存到磁盘")
+        let note = NSTextField(wrappingLabelWithString: "本地历史 10 秒 · 云端详情 30 秒 · 仅保留内存")
         note.textColor = .secondaryLabelColor
         body(note)
-        let refresh = NSButton(title: "刷新历史", target: self, action: #selector(refreshHistory))
+        let refresh = NSButton(title: "刷新详情", target: self, action: #selector(refreshAll))
         refresh.bezelStyle = .rounded
         stack.addArrangedSubview(refresh)
         resizeCard()
@@ -113,6 +120,13 @@ final class PortDetail: NSObject {
         onResize?()
     }
     func start() {
+        visible = true
+        refreshCloud()
+        cloudTimer?.invalidate()
+        cloudTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshCloud() }
+        }
+        RunLoop.main.add(cloudTimer!, forMode: .common)
         refreshHistory()
         timer?.invalidate()
         let t = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
@@ -122,11 +136,15 @@ final class PortDetail: NSObject {
         RunLoop.main.add(t, forMode: .common)
     }
     func stop() {
+        visible = false
+        cloudTimer?.invalidate(); cloudTimer = nil
+        clearCloud()
         revision += 1
         task?.cancel(); task = nil
         timer?.invalidate(); timer = nil
     }
     func markOffline() {
+        clearCloud(); lastPort = nil
         hasLiveData = false
         status.stringValue = "连接中断 · 等待恢复"
         status.textColor = .systemOrange
@@ -135,18 +153,65 @@ final class PortDetail: NSObject {
         resizeCard()
     }
     func render(_ port: Port) {
+        let changed = lastPort?.attached != port.attached || lastPort?.session_id != port.session_id
+        if changed { clearCloud() }
+        lastPort = port
         let energy = port.sessionWh.map { String(format: "%.3f Wh", $0) } ?? "未获取"
         let budget = port.power_budget.flatMap { $0.isFinite && $0 >= 0 ? String(format: "%.0f W", $0) : nil } ?? "未获取"
         session.stringValue = "本次输出  \(energy)    ·    \(port.durationText)\n当前功率  \(String(format: "%.2f W", port.watts))    ·    功率上限  \(budget)"
-        cable.stringValue = port.cableDescription
-        pd.stringValue = port.pd_status?.pdText ?? ((15...21).contains(port.fc_protocol) && port.attached
-            ? "已识别：\(port.protocolName)\n协商参数未获取 · 设备的 PD 详情为空"
-            : "未获取 · 设备未返回 PD 详情")
+        renderCloud()
+        if changed && visible { refreshCloud() }
         status.stringValue = "\(port.attached ? port.protocolName : "未连接") · \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)) 更新"
         status.textColor = .secondaryLabelColor
         hasLiveData = true
         resizeCard()
     }
+    private func clearCloud() {
+        cloudRevision += 1; cloudTask?.cancel(); cloudTask = nil
+        cloudPD = nil; cloudMessage = "官方 MCP · 展开后读取"
+    }
+    private func renderCloud() {
+        guard let port = lastPort else { return }
+        if port.port_type == "A" || !port.attached {
+            cable.stringValue = port.cableDescription
+            pd.stringValue = port.attached ? "不适用 · USB-A 无 PD 协商" : "未连接"
+        } else if let cloudPD {
+            cable.stringValue = cloudPD.cableText
+            pd.stringValue = cloudPD.pdText + "\n" + cloudMessage
+        } else {
+            cable.stringValue = "未获取 · " + cloudMessage
+            pd.stringValue = "当前协议：\(port.protocolName)\n" + cloudMessage
+        }
+        resizeCard()
+    }
+    @objc private func refreshAll() { refreshHistory(); refreshCloud() }
+    private func refreshCloud() {
+        guard visible, cloudTask == nil, let port = lastPort, port.attached, port.port_type != "A" else { return }
+        let revision = cloudRevision
+        cloudMessage = "官方 MCP · 正在读取"
+        renderCloud()
+        cloudTask = Task { @MainActor in
+            defer { if cloudRevision == revision { cloudTask = nil } }
+            do {
+                let snapshot = try await CloudPDClient.fetch()
+                guard !Task.isCancelled, visible, cloudRevision == revision else { return }
+                cloudPD = snapshot[portID]
+                cloudMessage = cloudPD == nil ? "官方 MCP 未返回该端口详情" : "官方 MCP · \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)) 更新"
+            } catch {
+                guard !Task.isCancelled, visible, cloudRevision == revision else { return }
+                cloudPD = nil
+                cloudMessage = (error as? CloudError)?.localizedDescription ?? "官方 MCP 请求失败，可刷新重试"
+            }
+            renderCloud()
+        }
+    }
+    func verifyCloud(_ value: CloudPD) {
+        cloudPD = value; cloudMessage = "官方 MCP · 测试数据"
+        renderCloud(); if let lastPort { render(lastPort) }; verifyLayout()
+        precondition(pd.stringValue.contains("12.00 V") && pd.stringValue.contains("3.00 A"))
+        precondition(cable.stringValue.contains("unknown(2)"))
+    }
+
     func render(_ history: PortHistory, samples: [PortHistory.Sample]) {
         chart.period = history.sample_period_ms / 1000
         chart.watts = samples.map(\.watts)

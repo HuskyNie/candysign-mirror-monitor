@@ -9,7 +9,7 @@ build/generate-icons build/AppIcon.iconset
 iconutil -c icns build/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 swiftc -swift-version 5 -O -module-cache-path "$PWD/build/module-cache" \
   -target "$(uname -m)-apple-macosx13.0" \
-  Sources/Artwork.swift Sources/Metrics.swift Sources/PortDetail.swift Sources/main.swift -o "$APP/Contents/MacOS/MirrorMonitor"
+  Sources/Artwork.swift Sources/Metrics.swift Sources/CloudPD.swift Sources/PortDetail.swift Sources/main.swift -o "$APP/Contents/MacOS/MirrorMonitor"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -20,8 +20,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>小电拼</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.2.4</string>
-<key>CFBundleVersion</key><string>8</string>
+<key>CFBundleShortVersionString</key><string>1.3.0</string>
+<key>CFBundleVersion</key><string>9</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>连接你的小电拼，显示各 USB 端口的实时电压、电流和功率。</string>

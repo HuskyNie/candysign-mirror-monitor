@@ -43,8 +43,8 @@ final class PortRow: NSView {
         tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
         addTrackingArea(tracking!)
     }
-    override func mouseEntered(with event: NSEvent) { onHover?(id) }
-    override func mouseExited(with event: NSEvent) { onExit?(id) }
+    override func mouseEntered(with event: NSEvent) { if !CommandLine.arguments.contains("--verify-ui") { onHover?(id) } }
+    override func mouseExited(with event: NSEvent) { if !CommandLine.arguments.contains("--verify-ui") { onExit?(id) } }
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self); onHover?(id) }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 124 || event.keyCode == 36 || event.keyCode == 49 { onHover?(id) }
@@ -72,8 +72,8 @@ final class DetailHoverScrollView: NSScrollView {
         tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
         addTrackingArea(tracking!)
     }
-    override func mouseEntered(with event: NSEvent) { onEnter?() }
-    override func mouseExited(with event: NSEvent) { onExit?() }
+    override func mouseEntered(with event: NSEvent) { if !CommandLine.arguments.contains("--verify-ui") { onEnter?() } }
+    override func mouseExited(with event: NSEvent) { if !CommandLine.arguments.contains("--verify-ui") { onExit?() } }
 }
 
 @MainActor
@@ -161,7 +161,9 @@ final class Monitor: NSObject, NSApplicationDelegate {
         let refresh = NSButton(title: "刷新", target: self, action: #selector(refresh))
         let quit = NSButton(title: "退出", target: self, action: #selector(quit))
         for button in [settings, refresh, quit] { button.bezelStyle = .rounded }
-        let footer = NSStackView(views: [settings, refresh, quit]); footer.spacing = 12
+        let cloud = NSButton(title: "云端授权", target: self, action: #selector(cloudSettings))
+        cloud.bezelStyle = .rounded
+        let footer = NSStackView(views: [settings, cloud, refresh, quit]); footer.spacing = 6
         stack.addArrangedSubview(footer)
         popover.contentViewController = controller
         popover.contentSize = NSSize(width: 360, height: 508)
@@ -416,6 +418,18 @@ final class Monitor: NSObject, NSApplicationDelegate {
         closeMenus(); timer?.invalidate(); generation += 1; request?.cancel(); request = nil; markOffline()
     }
     @objc private func wake() { start() }
+    @objc private func cloudSettings() {
+        closeMenus()
+        let alert = NSAlert(); alert.messageText = "官方 MCP 授权"
+        alert.informativeText = "粘贴小电拼提供的 MCP 地址。授权仅存入本机钥匙串；只读取线材与 PD，不修改设备。"
+        let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 24))
+        alert.accessoryView = input; alert.window.initialFirstResponder = input
+        alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do { try CloudCredential.save(input.stringValue); buildDetails() }
+        catch { let failure = NSAlert(); failure.messageText = "授权地址无效或钥匙串保存失败"; failure.runModal() }
+    }
     @objc private func settings() {
         closeMenus()
         let alert = NSAlert(); alert.messageText = "连接小电拼"
@@ -436,7 +450,21 @@ final class Monitor: NSObject, NSApplicationDelegate {
     @objc private func quit() { closeMenus(); NSApp.terminate(nil) }
 }
 
-if let index = CommandLine.arguments.firstIndex(of: "--probe"), CommandLine.arguments.count > index + 1 {
+if CommandLine.arguments.contains("--configure-mcp-stdin") {
+    do { try CloudCredential.save(readLine() ?? ""); print("MCP authorization saved to Keychain") }
+    catch { fputs("MCP authorization could not be saved\n", stderr); exit(1) }
+} else if CommandLine.arguments.contains("--verify-mcp") {
+    Task {
+        do {
+            let ports = try await CloudPDClient.fetch()
+            for (id, pd) in ports.sorted(by: { $0.key < $1.key }) {
+                print("C\(id):\n\(pd.cableText)\n\(pd.pdText)")
+            }
+            print("PASS: official MCP read and port mapping (\(ports.count) returned ports)"); exit(0)
+        } catch { fputs("MCP verification failed (credentials redacted)\n", stderr); exit(1) }
+    }
+    dispatchMain()
+} else if let index = CommandLine.arguments.firstIndex(of: "--probe"), CommandLine.arguments.count > index + 1 {
     let host = CommandLine.arguments[index + 1]
     Task {
         do {

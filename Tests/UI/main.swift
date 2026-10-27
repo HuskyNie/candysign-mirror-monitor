@@ -23,5 +23,9 @@ MainActor.assumeIsolated {
     detail.render(port)
     detail.render(history, samples: samples)
     detail.verifyLayout()
+    detail.verifyCloud(CloudPD(values: ["has_emarker": true, "operating_voltage": 1200,
+        "operating_current": 300, "pd_revision": "PD 3.0", "cable_max_vbus_current": "unknown(2)",
+        "cable_max_vbus_voltage": "20V", "cable_usb_highest_speed": "USB 2.0"]))
+    print("PASS: cloud cable/PD layout and chip-unit conversion")
     detail.stop()
 }

@@ -58,3 +58,27 @@ precondition(extraPort.cableDescription.contains("暂未上报"))
 let unplugged = try Metrics.decode(Data(extra.replacingOccurrences(of: "\"attached\":true", with: "\"attached\":false").utf8)).ports[2]
 precondition(unplugged.cableDescription.contains("未连接") && !unplugged.cableDescription.contains("暂未上报"))
 print("PASS: USB-A, unplugged USB-C and absent device cable data are distinct")
+
+let cloudFixture: [String: Any] = ["port": 5, "has_emarker": true, "operating_voltage": 1200,
+    "operating_current": 300, "pd_revision": "PD 3.0", "cable_max_vbus_current": "unknown(2)",
+    "cable_max_vbus_voltage": "20V", "cable_usb_highest_speed": "USB 2.0"]
+let cloudMapping: [[String: Any]] = ["A", "C1", "C2", "C3", "C4"].enumerated().map { ["index": $0.offset + 1, "name": $0.element] }
+let cloudPorts = try CloudPD.decode(ports: [cloudFixture], mapping: cloudMapping)
+precondition(cloudPorts[4] != nil && cloudPorts[5] == nil)
+precondition(cloudPorts[4]!.pdText.contains("12.00 V") && cloudPorts[4]!.pdText.contains("3.00 A"))
+precondition(cloudPorts[4]!.cableText.contains("5 A（固件枚举；云端 unknown(2)）"))
+var future = cloudFixture; future["cable_max_vbus_current"] = "unknown(9)"; future["pd_revision"] = "unknown(7)"
+precondition(CloudPD(values: future).cableText.contains("unknown(9)"))
+precondition(CloudPD(values: future).pdText.contains("unknown(7)"))
+future["has_emarker"] = false
+precondition(!CloudPD(values: future).cableText.contains("USB 2.0"))
+future.removeValue(forKey: "has_emarker")
+precondition(CloudPD(values: future).cableText.contains("未获取"))
+precondition((try? CloudPD.decode(ports: [cloudFixture, cloudFixture], mapping: cloudMapping)) == nil)
+precondition((try? CloudPD.decode(ports: [cloudFixture], mapping: Array(cloudMapping.dropLast()))) == nil)
+let normalizedCloud = try CloudCredential.endpoint("https://mcp.thecandysign.com/123/test/sse")
+precondition(normalizedCloud.path == "/123/test/mcp")
+for url in ["http://mcp.thecandysign.com/123/test/mcp", "https://example.com/123/test/mcp", "https://mcp.thecandysign.com/123/test/mcp?redirect=x"] {
+    precondition((try? CloudCredential.endpoint(url)) == nil)
+}
+print("PASS: cloud/local port mapping, independent units, unknown enums, missing eMarker and credential host restrictions")
