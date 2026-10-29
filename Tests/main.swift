@@ -37,6 +37,17 @@ let h = try PortHistory.decode(Data("""
 """.utf8))
 precondition(abs(h.energyWh(h.recent(4)!) - 1.0 / 3.0) < 1e-10)
 precondition(h.recent(1) == nil)
+// Session estimate excludes previous-session samples and never extrapolates.
+let sessionSamples = [PortHistory.Sample(voltage: 20000, current: 5000),
+                      PortHistory.Sample(voltage: 10000, current: 2000),
+                      PortHistory.Sample(voltage: 10000, current: 2000)]
+precondition(abs(h.sessionEnergyWh(sessionSamples, duration: 20)! - 40.0 / 360) < 1e-10)
+precondition(h.sessionEnergyWh(sessionSamples, duration: 25) == h.sessionEnergyWh(sessionSamples, duration: 20))
+for duration: Double? in [nil, -1, .nan, .infinity, 0, 9, 31] {
+    precondition(h.sessionEnergyWh(sessionSamples, duration: duration) == nil)
+}
+precondition(h.sessionEnergyWh([], duration: 20) == nil)
+print("PASS: session energy excludes preceding samples, partial boundary and insufficient history")
 for bad in ["{\"sample_period_ms\":0,\"ports\":[]}", "{\"sample_period_ms\":10000,\"ports\":[{\"port\":0,\"samples\":[{\"voltage\":-1,\"current\":0}]}]}"] {
     precondition((try? PortHistory.decode(Data(bad.utf8))) == nil)
 }

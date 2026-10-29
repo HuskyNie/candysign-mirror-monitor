@@ -64,6 +64,10 @@ final class PortDetail: NSObject {
     private var cloudPD: CloudPD?
     private var cloudMessage = "官方 MCP · 展开后读取"
     private var lastPort: Port?
+    private var sessionEstimate: Double?
+    private var estimateAt: Date?
+    private var estimateMessage = "等待硬件历史"
+    var sessionText: String { session.stringValue }
     private var visible = false
     private var revision = 0
     private(set) var verifiedHistoryCount = 0
@@ -142,6 +146,7 @@ final class PortDetail: NSObject {
         revision += 1
         task?.cancel(); task = nil
         timer?.invalidate(); timer = nil
+        clearEnergy()
     }
     func markStale(time: String) {
         status.stringValue = "本地更新延迟 · 上次成功 \(time)"
@@ -149,6 +154,7 @@ final class PortDetail: NSObject {
     }
     func markOffline() {
         clearCloud(); lastPort = nil
+        clearEnergy()
         hasLiveData = false
         status.stringValue = "连接中断 · 等待恢复"
         status.textColor = .systemOrange
@@ -157,18 +163,35 @@ final class PortDetail: NSObject {
         resizeCard()
     }
     func render(_ port: Port) {
-        let changed = lastPort?.attached != port.attached || lastPort?.session_id != port.session_id
-        if changed { clearCloud() }
+        let durationReset = (port.charging_duration_seconds ?? 0) < (lastPort?.charging_duration_seconds ?? 0)
+        let changed = lastPort?.attached != port.attached || lastPort?.session_id != port.session_id || durationReset
+        if changed {
+            clearCloud(); clearEnergy()
+            revision += 1; task?.cancel(); task = nil
+        }
         lastPort = port
-        let energy = port.sessionWh.map { String(format: "%.3f Wh", $0) } ?? "未获取"
-        let budget = port.power_budget.flatMap { $0.isFinite && $0 >= 0 ? String(format: "%.0f W", $0) : nil } ?? "未获取"
-        session.stringValue = "本次输出  \(energy)    ·    \(port.durationText)\n当前功率  \(String(format: "%.2f W", port.watts))    ·    功率上限  \(budget)"
+        renderSession()
         renderCloud()
-        if changed && visible { refreshCloud() }
+        if changed && visible { refreshCloud(); refreshHistory() }
         status.stringValue = "\(port.attached ? port.protocolName : "未连接") · \(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)) 更新"
         status.textColor = .secondaryLabelColor
         hasLiveData = true
         resizeCard()
+    }
+    private func clearEnergy() {
+        sessionEstimate = nil; estimateAt = nil; estimateMessage = "等待硬件历史"
+        renderSession()
+    }
+    private func renderSession() {
+        guard let port = lastPort else { return }
+        let fresh = estimateAt.map { Date().timeIntervalSince($0) <= 25 } ?? false
+        let energy: String
+        if !port.attached { energy = "本次输出  未连接" }
+        else if fresh, let value = sessionEstimate { energy = String(format: "本次估算输出  %.3f Wh", value) }
+        else { energy = "本次输出  未获取（\(fresh ? estimateMessage : "等待硬件历史")）" }
+        let budget = port.power_budget.flatMap { $0.isFinite && $0 >= 0 ? String(format: "%.0f W", $0) : nil } ?? "未获取"
+        session.stringValue = "\(energy)\n本次时长  \(port.durationText)\n当前功率  \(String(format: "%.2f W", port.watts))    ·    功率上限  \(budget)"
+        session.toolTip = "本次输出按充电时长截取硬件历史估算，边界误差约一个采样周期。会话超过历史范围时不显示完整本次电量。设备累计字段与功率积分不一致，未用于显示。"
     }
     private func clearCloud() {
         cloudRevision += 1; cloudTask?.cancel(); cloudTask = nil
@@ -217,13 +240,17 @@ final class PortDetail: NSObject {
     }
 
     func render(_ history: PortHistory, samples: [PortHistory.Sample]) {
+        sessionEstimate = history.sessionEnergyWh(samples, duration: lastPort?.charging_duration_seconds)
+        estimateAt = Date()
+        estimateMessage = samples.isEmpty ? "暂无历史" : "历史未覆盖完整会话或时长不足一个采样周期"
+        renderSession()
         chart.period = history.sample_period_ms / 1000
         chart.watts = samples.map(\.watts)
         verifiedHistoryCount = samples.count
         if samples.isEmpty { summary.stringValue = "暂无历史数据 · 等待硬件采样" }
         else {
             let average = samples.reduce(0) { $0 + $1.watts } / Double(samples.count)
-            summary.stringValue = String(format: "%.1f 分钟 · %d 点 · 估算输出 %.3f Wh\n平均 %.2f W    采样峰值 %.2f W", Double(samples.count) * chart.period / 60, samples.count, history.energyWh(samples), average, samples.map(\.watts).max() ?? 0)
+            summary.stringValue = String(format: "最近 %.1f 分钟 · %d 点\n此时间段估算输出 %.3f Wh\n平均 %.2f W    采样峰值 %.2f W", Double(samples.count) * chart.period / 60, samples.count, history.energyWh(samples), average, samples.map(\.watts).max() ?? 0)
         }
         resizeCard()
     }
@@ -239,6 +266,7 @@ final class PortDetail: NSObject {
                 render(history, samples: samples)
             } catch {
                 guard !Task.isCancelled, revision == current else { return }
+                clearEnergy()
                 chart.watts = []; verifiedHistoryCount = 0
                 summary.stringValue = "历史未获取 · 可点击下方刷新重试"
                 resizeCard()

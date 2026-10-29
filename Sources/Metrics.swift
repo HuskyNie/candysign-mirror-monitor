@@ -262,6 +262,18 @@ struct PortHistory: Decodable {
         // Each firmware sample is an interval average; do not bridge missing intervals.
         samples.reduce(0) { $0 + $1.watts } * sample_period_ms / 3_600_000
     }
+
+    // The device's session_charge currently undercounts relative to V*I over time.
+    // Estimate only when history covers the session; never extrapolate beyond it.
+    // Drop the fractional boundary interval to avoid including an earlier session.
+    func sessionEnergyWh(_ samples: [Sample], duration: Double?) -> Double? {
+        guard let duration, duration.isFinite, duration >= 0,
+              sample_period_ms.isFinite, sample_period_ms > 0 else { return nil }
+        let period = sample_period_ms / 1000
+        guard duration >= period, duration <= Double(samples.count) * period else { return nil }
+        let count = Int(floor(duration / period))
+        return energyWh(Array(samples.suffix(count)))
+    }
 }
 
 extension MetricsClient {
